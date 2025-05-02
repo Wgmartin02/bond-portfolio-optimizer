@@ -2,18 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import requests
 from datetime import datetime, timedelta
-import time
-from scipy.optimize import minimize
 import plotly.express as px
 import plotly.graph_objects as go
+from scipy.optimize import minimize
 import warnings
 warnings.filterwarnings('ignore')
-
-# Constants
-# Alpha Vantage free API key - replace with your own
-ALPHA_VANTAGE_API_KEY = "YOUR_API_KEY"  # Get a free API key from https://www.alphavantage.co/support/#api-key
 
 # Top 50 Bond ETFs by AUM
 TOP_BOND_ETFS = {
@@ -36,119 +30,103 @@ TOP_BOND_ETFS = {
     'IEF': 'iShares 7-10 Year Treasury Bond ETF',
     'SHV': 'iShares Short Treasury Bond ETF',
     'VTEB': 'Vanguard Tax-Exempt Bond ETF',
-    'IGSB': 'iShares Short-Term Corporate Bond ETF',
-    'SPIB': 'SPDR Portfolio Intermediate Term Corporate Bond ETF',
-    'USIG': 'iShares Broad USD Investment Grade Corporate Bond ETF',
-    'BIV': 'Vanguard Intermediate-Term Bond ETF',
-    'VGLT': 'Vanguard Long-Term Treasury ETF',
-    'SPTL': 'SPDR Portfolio Long Term Treasury ETF',
-    'TLT': 'iShares 20+ Year Treasury Bond ETF',
-    'SPSB': 'SPDR Portfolio Short Term Corporate Bond ETF',
-    'JNK': 'SPDR Bloomberg High Yield Bond ETF',
-    'SCHR': 'Schwab Intermediate-Term U.S. Treasury ETF',
-    'SCHP': 'Schwab U.S. TIPS ETF',
-    'SCHO': 'Schwab Short-Term U.S. Treasury ETF',
-    'SCHZ': 'Schwab U.S. Aggregate Bond ETF',
-    'HYLB': 'Xtrackers USD High Yield Corporate Bond ETF',
-    'SHYG': 'iShares 0-5 Year High Yield Corporate Bond ETF',
-    'BNDX': 'Vanguard Total International Bond ETF',
-    'FLOT': 'iShares Floating Rate Bond ETF',
-    'SLQD': 'iShares 0-5 Year Investment Grade Corporate Bond ETF',
-    'IGOV': 'iShares International Treasury Bond ETF',
-    'EMB': 'iShares J.P. Morgan USD Emerging Markets Bond ETF',
-    'BWX': 'SPDR Bloomberg International Treasury Bond ETF',
-    'SJNK': 'SPDR Bloomberg Short Term High Yield Bond ETF',
-    'VWOB': 'Vanguard Emerging Markets Government Bond ETF',
-    'LKOR': 'FlexShares Credit-Scored US Long Corporate Bond Index Fund',
-    'GBIL': 'Goldman Sachs Treasury Access 0-1 Year ETF',
-    'SUSB': 'iShares ESG Aware 1-5 Year USD Corporate Bond ETF',
-    'STIP': 'iShares 0-5 Year TIPS Bond ETF',
-    'BKLN': 'Invesco Senior Loan ETF',
-    'SHY': 'iShares 1-3 Year Treasury Bond ETF',
-    'BLV': 'Vanguard Long-Term Bond ETF',
-    'USHY': 'iShares Broad USD High Yield Corporate Bond ETF'
+    'IGSB': 'iShares Short-Term Corporate Bond ETF'
 }
 
-def get_etf_data_alpha_vantage(symbol, time_period='1year'):
-    """
-    Get historical ETF data from Alpha Vantage
-    """
-    try:
-        # Respect the rate limit (5 calls per minute for free API)
-        time.sleep(12)  # To ensure we don't exceed rate limits
-        
-        # Using TIME_SERIES_DAILY_ADJUSTED endpoint which works well for ETFs
-        url = f'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol={symbol}&outputsize=full&apikey={ALPHA_VANTAGE_API_KEY}'
-        
-        response = requests.get(url)
-        data = response.json()
-        
-        # Check for error messages
-        if 'Error Message' in data:
-            st.error(f"Error retrieving data for {symbol}: {data['Error Message']}")
-            return None
-        
-        if 'Time Series (Daily)' not in data:
-            if 'Note' in data:
-                st.warning(f"API limit reached: {data['Note']}")
-            else:
-                st.error(f"No data available for {symbol}")
-            return None
-        
-        # Convert to DataFrame
-        df = pd.DataFrame(data['Time Series (Daily)']).T
-        
-        # Convert columns to numeric
-        df = df.astype(float)
-        
-        # Rename columns for clarity
-        df.columns = [col.split('. ')[1] for col in df.columns]
-        
-        # Sort by date (ascending)
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-        
-        # Filter based on time period
-        if time_period == '1year':
-            start_date = datetime.now() - timedelta(days=365)
-            df = df[df.index >= start_date]
-        elif time_period == '2year':
-            start_date = datetime.now() - timedelta(days=730)
-            df = df[df.index >= start_date]
-        elif time_period == '3year':
-            start_date = datetime.now() - timedelta(days=1095)
-            df = df[df.index >= start_date]
-        
-        # Keep only adjusted close
-        return df['adjusted close']
-    
-    except Exception as e:
-        st.error(f"Error fetching data for {symbol}: {str(e)}")
-        return None
+# Simplified to 20 ETFs to make the list more manageable
 
-def get_historical_data(tickers, time_period='1year'):
+# Function to generate mock data for ETFs
+def generate_mock_data(tickers, days=252):
     """
-    Get historical price data for multiple tickers
+    Generate mock price data for the selected ETFs
     """
-    data = {}
-    valid_tickers = []
+    np.random.seed(42)  # For reproducibility
     
-    with st.spinner(f"Fetching data for {len(tickers)} ETFs... This may take a minute."):
-        for ticker in tickers:
-            ticker_data = get_etf_data_alpha_vantage(ticker, time_period)
-            if ticker_data is not None and not ticker_data.empty:
-                data[ticker] = ticker_data
-                valid_tickers.append(ticker)
+    # Start date (approximately 1 year ago)
+    start_date = datetime.now() - timedelta(days=days)
+    dates = [start_date + timedelta(days=i) for i in range(days)]
     
-    if not data:
-        return None
+    # Create DataFrame with dates as index
+    df = pd.DataFrame(index=dates)
     
-    # Convert to DataFrame
-    df = pd.DataFrame(data)
+    # Average expected returns and volatilities for different types of bond ETFs
+    etf_characteristics = {
+        # Ticker: (annual return, annual volatility)
+        'AGG': (0.03, 0.05),  # Core aggregate bonds
+        'BND': (0.03, 0.05),  # Total bond market
+        'VCIT': (0.035, 0.06),  # Intermediate corporate
+        'LQD': (0.035, 0.06),  # Investment grade corporate
+        'VCSH': (0.025, 0.03),  # Short-term corporate
+        'BSV': (0.02, 0.02),  # Short-term bonds
+        'MBB': (0.025, 0.04),  # Mortgage-backed
+        'GOVT': (0.022, 0.04),  # US Treasury
+        'VTIP': (0.02, 0.03),  # Short-term TIPS
+        'TIP': (0.025, 0.045),  # TIPS
+        'IGIB': (0.033, 0.055),  # Intermediate corporate
+        'MUB': (0.028, 0.04),  # Municipal bonds
+        'VGSH': (0.018, 0.015),  # Short-term Treasury
+        'VGIT': (0.022, 0.035),  # Intermediate Treasury
+        'HYG': (0.05, 0.08),  # High yield corporate
+        'VMBS': (0.024, 0.035),  # Mortgage-backed
+        'IEF': (0.023, 0.055),  # 7-10 Year Treasury
+        'SHV': (0.015, 0.01),  # Short Treasury
+        'VTEB': (0.027, 0.035),  # Tax-exempt
+        'IGSB': (0.025, 0.025)  # Short-term corporate
+    }
     
-    # Check if we have enough data
-    if len(df) < 30:  # Need at least 30 data points for meaningful analysis
-        st.warning("Not enough historical data points. Results may be less reliable.")
+    # Generate price data for each ticker
+    for ticker in tickers:
+        # Get characteristics or use default values
+        annual_return, annual_volatility = etf_characteristics.get(ticker, (0.03, 0.05))
+        
+        # Convert annual to daily parameters
+        daily_return = annual_return / 252
+        daily_volatility = annual_volatility / np.sqrt(252)
+        
+        # Generate random returns
+        returns = np.random.normal(daily_return, daily_volatility, days)
+        
+        # Create price series starting at 100
+        prices = 100 * (1 + returns).cumprod()
+        
+        # Add to DataFrame
+        df[ticker] = prices
+    
+    # Add correlation between ETFs (bonds tend to be correlated)
+    # Create a correlation matrix
+    corr_matrix = np.zeros((len(tickers), len(tickers)))
+    
+    for i in range(len(tickers)):
+        for j in range(len(tickers)):
+            # High correlation between similar types of bonds
+            if i == j:
+                corr_matrix[i, j] = 1.0
+            else:
+                # Base correlation is 0.7, modified by difference in volatility
+                ticker_i = tickers[i]
+                ticker_j = tickers[j]
+                vol_i = etf_characteristics.get(ticker_i, (0.03, 0.05))[1]
+                vol_j = etf_characteristics.get(ticker_j, (0.03, 0.05))[1]
+                
+                # More similar volatilities = higher correlation
+                sim_factor = 1 - abs(vol_i - vol_j) / max(vol_i, vol_j)
+                corr_matrix[i, j] = 0.7 * sim_factor
+    
+    # Generate correlated returns
+    means = np.array([etf_characteristics.get(ticker, (0.03, 0.05))[0] / 252 for ticker in tickers])
+    stds = np.array([etf_characteristics.get(ticker, (0.03, 0.05))[1] / np.sqrt(252) for ticker in tickers])
+    
+    # Generate correlated normal random variables
+    L = np.linalg.cholesky(corr_matrix)
+    uncorrelated = np.random.normal(0, 1, size=(days, len(tickers)))
+    correlated = uncorrelated @ L.T
+    
+    # Scale to appropriate mean and standard deviation
+    for i in range(len(tickers)):
+        correlated[:, i] = means[i] + correlated[:, i] * stds[i]
+    
+    # Convert to prices
+    df = pd.DataFrame(100 * (1 + correlated).cumprod(), columns=tickers, index=dates)
     
     return df
 
@@ -379,22 +357,14 @@ def run_portfolio_optimization():
     st.write("""
     This application helps optimize a bond ETF portfolio by finding the best allocation 
     to maximize risk-adjusted returns. Select 2-4 bond ETFs from the list below.
-    """)
     
-    # API key input
-    global ALPHA_VANTAGE_API_KEY
-    api_key = st.sidebar.text_input(
-        "Alpha Vantage API Key:",
-        value=ALPHA_VANTAGE_API_KEY,
-        type="password"
-    )
-    if api_key != ALPHA_VANTAGE_API_KEY:
-        ALPHA_VANTAGE_API_KEY = api_key
+    *Note: This app uses simulated data based on historical characteristics of these ETFs.*
+    """)
     
     # Sidebar for ETF selection
     st.sidebar.header("ETF Selection")
     
-    # Default ETFs that are most likely to have good data
+    # Default ETFs
     default_etfs = ["AGG", "BND"]
     
     selected_etfs = st.sidebar.multiselect(
@@ -415,10 +385,11 @@ def run_portfolio_optimization():
     ) / 100
     
     # Time period selection
-    time_period = st.sidebar.selectbox(
-        "Historical Period:",
-        ["1year", "2year", "3year"],
-        index=0
+    days = st.sidebar.selectbox(
+        "Historical Period (Days):",
+        [252, 504, 756],  # 1 year, 2 years, 3 years
+        index=0,
+        format_func=lambda x: f"{x//252} year{'s' if x//252 > 1 else ''} ({x} trading days)"
     )
     
     # Check if at least 2 ETFs are selected
@@ -439,23 +410,8 @@ def run_portfolio_optimization():
     
     if run_analysis:
         try:
-            # Get historical data
-            prices = get_historical_data(selected_etfs, time_period)
-            
-            # Check if we have valid data
-            if prices is None or prices.empty:
-                st.error("Could not retrieve data for the selected ETFs. Please try different ETFs or make sure your API key is valid.")
-                st.stop()
-            
-            # Verify we have data for all selected ETFs
-            if len(prices.columns) < len(selected_etfs):
-                missing_etfs = set(selected_etfs) - set(prices.columns)
-                st.warning(f"Could not retrieve data for: {', '.join(missing_etfs)}. Proceeding with available ETFs.")
-            
-            # Check if we have at least 2 ETFs with data
-            if len(prices.columns) < 2:
-                st.error("Need at least 2 ETFs with data for optimization. Please select different ETFs.")
-                st.stop()
+            # Generate mock data
+            prices = generate_mock_data(selected_etfs, days)
             
             # Calculate returns and metrics
             daily_returns, annual_returns, annual_volatility = calculate_returns(prices)
@@ -520,7 +476,7 @@ def run_portfolio_optimization():
             
             fig = px.line(
                 normalized_prices,
-                title=f"Historical Price Performance ({time_period})",
+                title=f"Historical Price Performance (Simulated)",
                 labels={"value": "Normalized Price", "variable": "ETF"}
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -588,10 +544,12 @@ def run_portfolio_optimization():
                 recommendation = "This aggressive portfolio offers higher potential returns but with increased volatility. Suitable for risk-tolerant investors."
             
             st.write(recommendation)
+            
+            # Disclaimer
+            st.caption("**Disclaimer**: This application uses simulated data based on historical ETF characteristics. The results are for educational purposes only and should not be considered investment advice.")
         
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
-            st.write("Try selecting different ETFs or check your API key.")
 
 if __name__ == "__main__":
     run_portfolio_optimization()
