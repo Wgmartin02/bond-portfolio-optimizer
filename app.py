@@ -13,7 +13,7 @@ warnings.filterwarnings('ignore')
 
 # Constants
 # Alpha Vantage free API key - replace with your own
-ALPHA_VANTAGE_API_KEY = "MH2X46EV62BMGBZ0"  # Get a free API key from https://www.alphavantage.co/support/#api-key
+ALPHA_VANTAGE_API_KEY = "YOUR_API_KEY"  # Get a free API key from https://www.alphavantage.co/support/#api-key
 
 # Top 50 Bond ETFs by AUM
 TOP_BOND_ETFS = {
@@ -382,13 +382,13 @@ def run_portfolio_optimization():
     """)
     
     # API key input
+    global ALPHA_VANTAGE_API_KEY
     api_key = st.sidebar.text_input(
         "Alpha Vantage API Key:",
         value=ALPHA_VANTAGE_API_KEY,
         type="password"
     )
     if api_key != ALPHA_VANTAGE_API_KEY:
-        global ALPHA_VANTAGE_API_KEY
         ALPHA_VANTAGE_API_KEY = api_key
     
     # Sidebar for ETF selection
