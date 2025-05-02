@@ -1,16 +1,21 @@
+import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
 import matplotlib.pyplot as plt
-import streamlit as st
+import requests
+from datetime import datetime, timedelta
+import time
 from scipy.optimize import minimize
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
-# List of top 50 bond ETFs by AUM
+# Constants
+# Alpha Vantage free API key - replace with your own
+ALPHA_VANTAGE_API_KEY = "MH2X46EV62BMGBZ0"  # Get a free API key from https://www.alphavantage.co/support/#api-key
+
+# Top 50 Bond ETFs by AUM
 TOP_BOND_ETFS = {
     'AGG': 'iShares Core U.S. Aggregate Bond ETF',
     'BND': 'Vanguard Total Bond Market ETF',
@@ -64,34 +69,88 @@ TOP_BOND_ETFS = {
     'USHY': 'iShares Broad USD High Yield Corporate Bond ETF'
 }
 
-
-def get_historical_data(tickers, period='2y'):
+def get_etf_data_alpha_vantage(symbol, time_period='1year'):
     """
-    Fetch historical price data for the given tickers
+    Get historical ETF data from Alpha Vantage
     """
     try:
-        data = yf.download(tickers, period=period, interval='1d')['Adj Close']
+        # Respect the rate limit (5 calls per minute for free API)
+        time.sleep(12)  # To ensure we don't exceed rate limits
         
-        # If we only have one ticker, the result is a Series, not a DataFrame
-        # Convert Series to DataFrame for consistency
-        if isinstance(data, pd.Series):
-            data = pd.DataFrame(data)
-            data.columns = [tickers]
-            
-        # Check if we have actual data
-        if data.empty:
+        # Using TIME_SERIES_DAILY_ADJUSTED endpoint which works well for ETFs
+        url = f'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol={symbol}&outputsize=full&apikey={ALPHA_VANTAGE_API_KEY}'
+        
+        response = requests.get(url)
+        data = response.json()
+        
+        # Check for error messages
+        if 'Error Message' in data:
+            st.error(f"Error retrieving data for {symbol}: {data['Error Message']}")
             return None
-            
-        # Check for columns with all NaN values
-        valid_columns = data.columns[data.notna().any()]
-        if len(valid_columns) == 0:
+        
+        if 'Time Series (Daily)' not in data:
+            if 'Note' in data:
+                st.warning(f"API limit reached: {data['Note']}")
+            else:
+                st.error(f"No data available for {symbol}")
             return None
-            
-        return data[valid_columns]
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(data['Time Series (Daily)']).T
+        
+        # Convert columns to numeric
+        df = df.astype(float)
+        
+        # Rename columns for clarity
+        df.columns = [col.split('. ')[1] for col in df.columns]
+        
+        # Sort by date (ascending)
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
+        
+        # Filter based on time period
+        if time_period == '1year':
+            start_date = datetime.now() - timedelta(days=365)
+            df = df[df.index >= start_date]
+        elif time_period == '2year':
+            start_date = datetime.now() - timedelta(days=730)
+            df = df[df.index >= start_date]
+        elif time_period == '3year':
+            start_date = datetime.now() - timedelta(days=1095)
+            df = df[df.index >= start_date]
+        
+        # Keep only adjusted close
+        return df['adjusted close']
+    
     except Exception as e:
-        st.error(f"Error fetching data: {str(e)}")
+        st.error(f"Error fetching data for {symbol}: {str(e)}")
         return None
 
+def get_historical_data(tickers, time_period='1year'):
+    """
+    Get historical price data for multiple tickers
+    """
+    data = {}
+    valid_tickers = []
+    
+    with st.spinner(f"Fetching data for {len(tickers)} ETFs... This may take a minute."):
+        for ticker in tickers:
+            ticker_data = get_etf_data_alpha_vantage(ticker, time_period)
+            if ticker_data is not None and not ticker_data.empty:
+                data[ticker] = ticker_data
+                valid_tickers.append(ticker)
+    
+    if not data:
+        return None
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(data)
+    
+    # Check if we have enough data
+    if len(df) < 30:  # Need at least 30 data points for meaningful analysis
+        st.warning("Not enough historical data points. Results may be less reliable.")
+    
+    return df
 
 def calculate_returns(prices):
     """
@@ -99,30 +158,25 @@ def calculate_returns(prices):
     """
     if prices is None or prices.empty:
         return None, None, None
-        
-    try:
-        daily_returns = prices.pct_change().dropna()
-        
-        # Handle case with insufficient data
-        if len(daily_returns) < 20:  # Need enough data points for meaningful statistics
-            return None, None, None
-            
-        annual_returns = (1 + daily_returns.mean()) ** 252 - 1
-        annual_volatility = daily_returns.std() * np.sqrt(252)
-        return daily_returns, annual_returns, annual_volatility
-    except Exception as e:
-        st.error(f"Error calculating returns: {str(e)}")
-        return None, None, None
-
+    
+    # Calculate daily returns
+    daily_returns = prices.pct_change().dropna()
+    
+    # Calculate annualized returns
+    annual_returns = (1 + daily_returns.mean()) ** 252 - 1
+    
+    # Calculate annualized volatility
+    annual_volatility = daily_returns.std() * np.sqrt(252)
+    
+    return daily_returns, annual_returns, annual_volatility
 
 def calculate_sharpe_ratio(returns, volatility, risk_free_rate=0.03):
     """
     Calculate the Sharpe ratio for a portfolio
     """
-    if returns is None or volatility is None or volatility == 0:
+    if volatility == 0:
         return 0
     return (returns - risk_free_rate) / volatility
-
 
 def negative_sharpe_ratio(weights, returns, cov_matrix, risk_free_rate=0.03):
     """
@@ -134,10 +188,9 @@ def negative_sharpe_ratio(weights, returns, cov_matrix, risk_free_rate=0.03):
     # Avoid division by zero
     if portfolio_stddev == 0:
         return 0
-        
+    
     sharpe_ratio = (portfolio_return - risk_free_rate) / portfolio_stddev
     return -sharpe_ratio
-
 
 def monte_carlo_simulation(returns, num_portfolios=1000):
     """
@@ -146,68 +199,71 @@ def monte_carlo_simulation(returns, num_portfolios=1000):
     """
     if returns is None or returns.empty:
         return pd.DataFrame()
-        
+    
     num_assets = len(returns.columns)
     results = []
     
-    try:
-        for _ in range(num_portfolios):
-            # Generate random weights
-            weights = np.random.random(num_assets)
-            weights /= np.sum(weights)
-            
-            # Calculate annualized portfolio return and volatility
-            portfolio_return = np.sum(returns.mean() * 252 * weights)
-            portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(returns.cov() * 252, weights)))
-            
-            # Calculate Sharpe ratio
-            sharpe_ratio = calculate_sharpe_ratio(portfolio_return, portfolio_volatility)
-            
-            results.append({
-                'weights': weights,
-                'return': portfolio_return,
-                'volatility': portfolio_volatility,
-                'sharpe_ratio': sharpe_ratio
-            })
+    for _ in range(num_portfolios):
+        # Generate random weights
+        weights = np.random.random(num_assets)
+        weights /= np.sum(weights)
         
-        return pd.DataFrame(results)
-    except Exception as e:
-        st.error(f"Error in Monte Carlo simulation: {str(e)}")
-        return pd.DataFrame()
-
+        # Calculate portfolio return and volatility
+        portfolio_return = np.sum(returns.mean() * 252 * weights)
+        portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(returns.cov() * 252, weights)))
+        
+        # Calculate Sharpe ratio
+        sharpe_ratio = calculate_sharpe_ratio(portfolio_return, portfolio_volatility)
+        
+        results.append({
+            'weights': weights,
+            'return': portfolio_return,
+            'volatility': portfolio_volatility,
+            'sharpe_ratio': sharpe_ratio
+        })
+    
+    return pd.DataFrame(results)
 
 def optimize_portfolio(returns, risk_free_rate=0.03):
     """
     Find the optimal portfolio weights to maximize the Sharpe ratio
     """
-    if returns is None or returns.empty or len(returns.columns) < 2:
+    if returns is None or returns.empty:
         return None
-        
+    
     num_assets = len(returns.columns)
-    args = (returns.mean() * 252, returns.cov() * 252, risk_free_rate)
-    constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
-    bounds = tuple((0, 1) for _ in range(num_assets))
+    
+    # Initial guess (equal weights)
     initial_guess = np.array([1/num_assets] * num_assets)
     
+    # Constraints (weights sum to 1)
+    constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+    
+    # Bounds (weights between 0 and 1)
+    bounds = tuple((0, 1) for _ in range(num_assets))
+    
+    # Arguments for the negative Sharpe ratio function
+    args = (returns.mean() * 252, returns.cov() * 252, risk_free_rate)
+    
+    # Optimize
     try:
-        optimal_weights = minimize(
-            negative_sharpe_ratio, 
-            initial_guess, 
-            args=args, 
-            method='SLSQP', 
-            bounds=bounds, 
+        result = minimize(
+            negative_sharpe_ratio,
+            initial_guess,
+            args=args,
+            method='SLSQP',
+            bounds=bounds,
             constraints=constraints
         )
         
-        if optimal_weights['success']:
-            return optimal_weights['x']
+        if result['success']:
+            return result['x']
         else:
-            st.warning("Optimization did not converge. Using equal weights instead.")
-            return np.array([1/num_assets] * num_assets)
+            st.warning("Optimization did not converge. Using equal weights.")
+            return initial_guess
     except Exception as e:
         st.error(f"Optimization error: {str(e)}")
-        return np.array([1/num_assets] * num_assets)
-
+        return initial_guess
 
 def create_efficient_frontier_chart(mc_results, optimal_portfolio, etf_names):
     """
@@ -215,152 +271,130 @@ def create_efficient_frontier_chart(mc_results, optimal_portfolio, etf_names):
     """
     if mc_results.empty:
         return None
-        
-    try:
-        fig = go.Figure()
-        
-        # Plot random portfolios
-        fig.add_trace(go.Scatter(
-            x=mc_results['volatility'],
-            y=mc_results['return'],
-            mode='markers',
-            marker=dict(
-                size=5,
-                color=mc_results['sharpe_ratio'],
-                colorscale='Viridis',
-                showscale=True,
-                colorbar=dict(title='Sharpe Ratio')
-            ),
-            name='Random Portfolios'
-        ))
-        
-        # Plot optimal portfolio
-        fig.add_trace(go.Scatter(
-            x=[optimal_portfolio['volatility']],
-            y=[optimal_portfolio['return']],
-            mode='markers',
-            marker=dict(
-                color='red',
-                size=12,
-                symbol='star'
-            ),
-            name='Optimal Portfolio'
-        ))
-        
-        fig.update_layout(
-            title='Portfolio Efficient Frontier',
-            xaxis_title='Annualized Volatility',
-            yaxis_title='Annualized Return',
-            height=600,
-            legend=dict(
-                yanchor="top",
-                y=0.99,
-                xanchor="left",
-                x=0.01
-            ),
-            margin=dict(l=0, r=0, t=40, b=0)
-        )
-        
-        return fig
-    except Exception as e:
-        st.error(f"Error creating efficient frontier chart: {str(e)}")
-        return None
-
+    
+    fig = go.Figure()
+    
+    # Plot random portfolios
+    fig.add_trace(go.Scatter(
+        x=mc_results['volatility'],
+        y=mc_results['return'],
+        mode='markers',
+        marker=dict(
+            size=5,
+            color=mc_results['sharpe_ratio'],
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(title='Sharpe Ratio')
+        ),
+        name='Random Portfolios'
+    ))
+    
+    # Plot optimal portfolio
+    fig.add_trace(go.Scatter(
+        x=[optimal_portfolio['volatility']],
+        y=[optimal_portfolio['return']],
+        mode='markers',
+        marker=dict(
+            color='red',
+            size=12,
+            symbol='star'
+        ),
+        name='Optimal Portfolio'
+    ))
+    
+    fig.update_layout(
+        title='Portfolio Efficient Frontier',
+        xaxis_title='Annualized Volatility',
+        yaxis_title='Annualized Return',
+        height=600,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01
+        ),
+        margin=dict(l=0, r=0, t=40, b=0)
+    )
+    
+    return fig
 
 def create_portfolio_composition_chart(weights, etf_names):
     """
     Create a plotly pie chart showing portfolio composition
     """
-    if weights is None or len(weights) == 0:
-        return None
-        
-    try:
-        # Round weights to ensure they sum to 100%
-        weights = np.round(weights * 100, 2)
-        
-        fig = px.pie(
-            values=weights,
-            names=etf_names,
-            title='Optimal Portfolio Composition'
-        )
-        fig.update_traces(textposition='inside', textinfo='percent+label')
-        fig.update_layout(height=500)
-        
-        return fig
-    except Exception as e:
-        st.error(f"Error creating composition chart: {str(e)}")
-        return None
-
+    fig = px.pie(
+        values=weights,
+        names=etf_names,
+        title='Optimal Portfolio Composition'
+    )
+    fig.update_traces(textposition='inside', textinfo='percent+label')
+    fig.update_layout(height=500)
+    
+    return fig
 
 def create_correlation_heatmap(returns, etf_names):
     """
     Create a plotly heatmap showing correlation between assets
     """
-    if returns is None or returns.empty:
-        return None
-        
-    try:
-        corr_matrix = returns.corr()
-        
-        fig = px.imshow(
-            corr_matrix,
-            x=etf_names,
-            y=etf_names,
-            color_continuous_scale='RdBu_r',
-            title='Correlation Matrix'
-        )
-        
-        fig.update_layout(height=500)
-        
-        return fig
-    except Exception as e:
-        st.error(f"Error creating correlation heatmap: {str(e)}")
-        return None
-
+    corr_matrix = returns.corr()
+    
+    fig = px.imshow(
+        corr_matrix,
+        x=etf_names,
+        y=etf_names,
+        color_continuous_scale='RdBu_r',
+        title='Correlation Matrix'
+    )
+    
+    fig.update_layout(height=500)
+    
+    return fig
 
 def create_risk_metrics_table(optimal_portfolio, etf_names):
     """
     Create a risk metrics table for the optimal portfolio
     """
-    if optimal_portfolio is None:
-        return None, None
-        
-    try:
-        metrics = pd.DataFrame({
-            'ETF': etf_names,
-            'Weight (%)': [f"{w*100:.2f}%" for w in optimal_portfolio['weights']],
-            'Expected Return (%)': [f"{r*100:.2f}%" for r in optimal_portfolio['individual_returns']],
-            'Volatility (%)': [f"{v*100:.2f}%" for v in optimal_portfolio['individual_volatilities']]
-        })
-        
-        summary = pd.DataFrame({
-            'Metric': ['Portfolio Return', 'Portfolio Volatility', 'Sharpe Ratio'],
-            'Value': [
-                f"{optimal_portfolio['return']*100:.2f}%",
-                f"{optimal_portfolio['volatility']*100:.2f}%",
-                f"{optimal_portfolio['sharpe_ratio']:.2f}"
-            ]
-        })
-        
-        return metrics, summary
-    except Exception as e:
-        st.error(f"Error creating metrics table: {str(e)}")
-        return None, None
-
-
-def run_ai_portfolio_optimization():
-    st.set_page_config(layout="wide", page_title="AI-Powered Bond Portfolio Optimizer")
+    metrics = pd.DataFrame({
+        'ETF': etf_names,
+        'Weight (%)': [f"{w*100:.2f}%" for w in optimal_portfolio['weights']],
+        'Expected Return (%)': [f"{r*100:.2f}%" for r in optimal_portfolio['individual_returns']],
+        'Volatility (%)': [f"{v*100:.2f}%" for v in optimal_portfolio['individual_volatilities']]
+    })
     
-    st.title("AI-Powered Bond Portfolio Optimizer")
+    summary = pd.DataFrame({
+        'Metric': ['Portfolio Return', 'Portfolio Volatility', 'Sharpe Ratio'],
+        'Value': [
+            f"{optimal_portfolio['return']*100:.2f}%",
+            f"{optimal_portfolio['volatility']*100:.2f}%",
+            f"{optimal_portfolio['sharpe_ratio']:.2f}"
+        ]
+    })
+    
+    return metrics, summary
+
+def run_portfolio_optimization():
+    st.set_page_config(layout="wide", page_title="Bond Portfolio Optimizer")
+    
+    st.title("Bond Portfolio Optimizer")
     st.write("""
-    This application helps optimize a bond ETF portfolio. Select 2-4 bond ETFs from the list,
-    and the AI-powered system will find the optimal allocation to maximize risk-adjusted returns.
+    This application helps optimize a bond ETF portfolio by finding the best allocation 
+    to maximize risk-adjusted returns. Select 2-4 bond ETFs from the list below.
     """)
+    
+    # API key input
+    api_key = st.sidebar.text_input(
+        "Alpha Vantage API Key:",
+        value=ALPHA_VANTAGE_API_KEY,
+        type="password"
+    )
+    if api_key != ALPHA_VANTAGE_API_KEY:
+        global ALPHA_VANTAGE_API_KEY
+        ALPHA_VANTAGE_API_KEY = api_key
     
     # Sidebar for ETF selection
     st.sidebar.header("ETF Selection")
     
-    # Default ETFs that are more likely to have good data
+    # Default ETFs that are most likely to have good data
     default_etfs = ["AGG", "BND"]
     
     selected_etfs = st.sidebar.multiselect(
@@ -383,8 +417,8 @@ def run_ai_portfolio_optimization():
     # Time period selection
     time_period = st.sidebar.selectbox(
         "Historical Period:",
-        ["1y", "2y", "3y", "5y"],
-        index=1
+        ["1year", "2year", "3year"],
+        index=0
     )
     
     # Check if at least 2 ETFs are selected
@@ -400,47 +434,38 @@ def run_ai_portfolio_optimization():
     ])
     st.table(etf_df)
     
-    try:
-        with st.spinner("Fetching ETF data and analyzing portfolio..."):
+    # Run button
+    run_analysis = st.button("Run Portfolio Optimization")
+    
+    if run_analysis:
+        try:
             # Get historical data
-            prices = get_historical_data(selected_etfs, period=time_period)
+            prices = get_historical_data(selected_etfs, time_period)
             
             # Check if we have valid data
             if prices is None or prices.empty:
-                st.error("Could not retrieve data for the selected ETFs. Please try different ETFs.")
+                st.error("Could not retrieve data for the selected ETFs. Please try different ETFs or make sure your API key is valid.")
                 st.stop()
-                
-            # Check if we have enough columns (ETFs)
+            
+            # Verify we have data for all selected ETFs
+            if len(prices.columns) < len(selected_etfs):
+                missing_etfs = set(selected_etfs) - set(prices.columns)
+                st.warning(f"Could not retrieve data for: {', '.join(missing_etfs)}. Proceeding with available ETFs.")
+            
+            # Check if we have at least 2 ETFs with data
             if len(prices.columns) < 2:
-                st.error(f"Only retrieved data for {len(prices.columns)} ETF(s). Need at least 2 ETFs with data.")
+                st.error("Need at least 2 ETFs with data for optimization. Please select different ETFs.")
                 st.stop()
-                
-            # Show which ETFs have data
-            valid_etfs = list(prices.columns)
-            if len(valid_etfs) < len(selected_etfs):
-                st.warning(f"Only found data for these ETFs: {', '.join(valid_etfs)}")
-                
+            
             # Calculate returns and metrics
             daily_returns, annual_returns, annual_volatility = calculate_returns(prices)
             
-            if daily_returns is None or annual_returns is None:
-                st.error("Could not calculate returns from the data. Try different ETFs or a longer time period.")
-                st.stop()
-                
             # Run Monte Carlo simulation
             mc_results = monte_carlo_simulation(daily_returns)
             
-            if mc_results.empty:
-                st.error("Monte Carlo simulation failed. Try different ETFs.")
-                st.stop()
-                
             # Find optimal portfolio
             optimal_weights = optimize_portfolio(daily_returns, risk_free_rate)
             
-            if optimal_weights is None:
-                st.error("Portfolio optimization failed. Try different ETFs.")
-                st.stop()
-                
             # Calculate metrics for optimal portfolio
             optimal_portfolio = {
                 'weights': optimal_weights,
@@ -450,15 +475,15 @@ def run_ai_portfolio_optimization():
                 'individual_volatilities': annual_volatility.values
             }
             optimal_portfolio['sharpe_ratio'] = calculate_sharpe_ratio(
-                optimal_portfolio['return'], 
+                optimal_portfolio['return'],
                 optimal_portfolio['volatility'],
                 risk_free_rate
             )
             
             # Create ETF names list for charts
-            etf_names = valid_etfs
+            etf_names = list(prices.columns)
             
-            # ---- Display Results ----
+            # Display results
             col1, col2 = st.columns([3, 1])
             
             # Efficient Frontier Chart
@@ -470,25 +495,22 @@ def run_ai_portfolio_optimization():
             # Portfolio Composition
             with col2:
                 composition_chart = create_portfolio_composition_chart(optimal_portfolio['weights'], etf_names)
-                if composition_chart:
-                    st.plotly_chart(composition_chart, use_container_width=True)
+                st.plotly_chart(composition_chart, use_container_width=True)
             
             # Risk Metrics Table
             st.subheader("Portfolio Risk Metrics")
             metrics_df, summary_df = create_risk_metrics_table(optimal_portfolio, etf_names)
             
-            if metrics_df is not None and summary_df is not None:
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    st.table(metrics_df)
-                with col2:
-                    st.table(summary_df)
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.table(metrics_df)
+            with col2:
+                st.table(summary_df)
             
             # Correlation Heatmap
             st.subheader("ETF Correlation Analysis")
             correlation_chart = create_correlation_heatmap(daily_returns, etf_names)
-            if correlation_chart:
-                st.plotly_chart(correlation_chart, use_container_width=True)
+            st.plotly_chart(correlation_chart, use_container_width=True)
             
             # Historical Performance
             st.subheader("Historical Performance")
@@ -506,7 +528,7 @@ def run_ai_portfolio_optimization():
             # Add risk assessment results
             st.subheader("AI Risk Assessment")
             
-            # Simple risk score based on volatility and correlation
+            # Simple risk score based on volatility
             risk_score = int((optimal_portfolio['volatility'] * 100) * 2)
             if risk_score > 100:  # Cap at 100
                 risk_score = 100
@@ -539,7 +561,7 @@ def run_ai_portfolio_optimization():
                 long_term_etfs = ["TLT", "VGLT", "BLV", "SPTL"]
                 short_term_etfs = ["SHY", "VCSH", "BSV", "SCHO", "VGSH", "SHV"]
                 
-                # Check if any long-term bonds are in the selected ETFs with significant weight
+                # Check if any long-term bonds are in the selected ETFs
                 if any(etf in etf_names for etf in long_term_etfs):
                     interest_rate_sensitivity = "High"
                 # Check if mostly short-term bonds
@@ -555,8 +577,8 @@ def run_ai_portfolio_optimization():
                 else:
                     st.error("High sensitivity to interest rate changes")
             
-            # Bond Market Outlook
-            st.subheader("Market Outlook and AI Recommendation")
+            # Portfolio Recommendation
+            st.subheader("Portfolio Recommendation")
             
             if risk_score < 40:
                 recommendation = "This conservative portfolio is well-suited for risk-averse investors. It offers stability with modest returns."
@@ -566,11 +588,10 @@ def run_ai_portfolio_optimization():
                 recommendation = "This aggressive portfolio offers higher potential returns but with increased volatility. Suitable for risk-tolerant investors."
             
             st.write(recommendation)
-    
-    except Exception as e:
-        st.error(f"An unexpected error occurred: {str(e)}")
-        st.write("Try selecting different ETFs or a different time period.")
-
+        
+        except Exception as e:
+            st.error(f"An error occurred: {str(e)}")
+            st.write("Try selecting different ETFs or check your API key.")
 
 if __name__ == "__main__":
-    run_ai_portfolio_optimization()
+    run_portfolio_optimization()
