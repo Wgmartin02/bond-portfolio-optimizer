@@ -33,8 +33,6 @@ TOP_BOND_ETFS = {
     'IGSB': 'iShares Short-Term Corporate Bond ETF'
 }
 
-# Simplified to 20 ETFs to make the list more manageable
-
 # Function to generate mock data for ETFs
 def generate_mock_data(tickers, days=252):
     """
@@ -42,39 +40,39 @@ def generate_mock_data(tickers, days=252):
     """
     np.random.seed(42)  # For reproducibility
     
-    # Start date (approximately 1 year ago)
-    start_date = datetime.now() - timedelta(days=days)
-    dates = [start_date + timedelta(days=i) for i in range(days)]
+    # Create date range
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=days)
+    date_range = pd.date_range(start=start_date, end=end_date, periods=days)
     
-    # Create DataFrame with dates as index
-    df = pd.DataFrame(index=dates)
+    # Create an empty DataFrame with dates as index
+    df = pd.DataFrame(index=date_range)
     
-    # Average expected returns and volatilities for different types of bond ETFs
+    # Define ETF characteristics (annual return, annual volatility)
     etf_characteristics = {
-        # Ticker: (annual return, annual volatility)
-        'AGG': (0.03, 0.05),  # Core aggregate bonds
-        'BND': (0.03, 0.05),  # Total bond market
-        'VCIT': (0.035, 0.06),  # Intermediate corporate
-        'LQD': (0.035, 0.06),  # Investment grade corporate
-        'VCSH': (0.025, 0.03),  # Short-term corporate
-        'BSV': (0.02, 0.02),  # Short-term bonds
-        'MBB': (0.025, 0.04),  # Mortgage-backed
-        'GOVT': (0.022, 0.04),  # US Treasury
-        'VTIP': (0.02, 0.03),  # Short-term TIPS
-        'TIP': (0.025, 0.045),  # TIPS
-        'IGIB': (0.033, 0.055),  # Intermediate corporate
-        'MUB': (0.028, 0.04),  # Municipal bonds
-        'VGSH': (0.018, 0.015),  # Short-term Treasury
-        'VGIT': (0.022, 0.035),  # Intermediate Treasury
-        'HYG': (0.05, 0.08),  # High yield corporate
-        'VMBS': (0.024, 0.035),  # Mortgage-backed
-        'IEF': (0.023, 0.055),  # 7-10 Year Treasury
-        'SHV': (0.015, 0.01),  # Short Treasury
-        'VTEB': (0.027, 0.035),  # Tax-exempt
-        'IGSB': (0.025, 0.025)  # Short-term corporate
+        'AGG': (0.03, 0.05),
+        'BND': (0.03, 0.05),
+        'VCIT': (0.035, 0.06),
+        'LQD': (0.035, 0.06),
+        'VCSH': (0.025, 0.03),
+        'BSV': (0.02, 0.02),
+        'MBB': (0.025, 0.04),
+        'GOVT': (0.022, 0.04),
+        'VTIP': (0.02, 0.03),
+        'TIP': (0.025, 0.045),
+        'IGIB': (0.033, 0.055),
+        'MUB': (0.028, 0.04),
+        'VGSH': (0.018, 0.015),
+        'VGIT': (0.022, 0.035),
+        'HYG': (0.05, 0.08),
+        'VMBS': (0.024, 0.035),
+        'IEF': (0.023, 0.055),
+        'SHV': (0.015, 0.01),
+        'VTEB': (0.027, 0.035),
+        'IGSB': (0.025, 0.025)
     }
     
-    # Generate price data for each ticker
+    # Simple approach: generate independent random walks for each ETF
     for ticker in tickers:
         # Get characteristics or use default values
         annual_return, annual_volatility = etf_characteristics.get(ticker, (0.03, 0.05))
@@ -83,50 +81,14 @@ def generate_mock_data(tickers, days=252):
         daily_return = annual_return / 252
         daily_volatility = annual_volatility / np.sqrt(252)
         
-        # Generate random returns
-        returns = np.random.normal(daily_return, daily_volatility, days)
+        # Generate random daily returns
+        daily_returns = np.random.normal(daily_return, daily_volatility, days)
         
-        # Create price series starting at 100
-        prices = 100 * (1 + returns).cumprod()
+        # Convert returns to prices (start at 100)
+        prices = 100 * (1 + daily_returns).cumprod()
         
         # Add to DataFrame
         df[ticker] = prices
-    
-    # Add correlation between ETFs (bonds tend to be correlated)
-    # Create a correlation matrix
-    corr_matrix = np.zeros((len(tickers), len(tickers)))
-    
-    for i in range(len(tickers)):
-        for j in range(len(tickers)):
-            # High correlation between similar types of bonds
-            if i == j:
-                corr_matrix[i, j] = 1.0
-            else:
-                # Base correlation is 0.7, modified by difference in volatility
-                ticker_i = tickers[i]
-                ticker_j = tickers[j]
-                vol_i = etf_characteristics.get(ticker_i, (0.03, 0.05))[1]
-                vol_j = etf_characteristics.get(ticker_j, (0.03, 0.05))[1]
-                
-                # More similar volatilities = higher correlation
-                sim_factor = 1 - abs(vol_i - vol_j) / max(vol_i, vol_j)
-                corr_matrix[i, j] = 0.7 * sim_factor
-    
-    # Generate correlated returns
-    means = np.array([etf_characteristics.get(ticker, (0.03, 0.05))[0] / 252 for ticker in tickers])
-    stds = np.array([etf_characteristics.get(ticker, (0.03, 0.05))[1] / np.sqrt(252) for ticker in tickers])
-    
-    # Generate correlated normal random variables
-    L = np.linalg.cholesky(corr_matrix)
-    uncorrelated = np.random.normal(0, 1, size=(days, len(tickers)))
-    correlated = uncorrelated @ L.T
-    
-    # Scale to appropriate mean and standard deviation
-    for i in range(len(tickers)):
-        correlated[:, i] = means[i] + correlated[:, i] * stds[i]
-    
-    # Convert to prices
-    df = pd.DataFrame(100 * (1 + correlated).cumprod(), columns=tickers, index=dates)
     
     return df
 
@@ -410,146 +372,148 @@ def run_portfolio_optimization():
     
     if run_analysis:
         try:
-            # Generate mock data
-            prices = generate_mock_data(selected_etfs, days)
-            
-            # Calculate returns and metrics
-            daily_returns, annual_returns, annual_volatility = calculate_returns(prices)
-            
-            # Run Monte Carlo simulation
-            mc_results = monte_carlo_simulation(daily_returns)
-            
-            # Find optimal portfolio
-            optimal_weights = optimize_portfolio(daily_returns, risk_free_rate)
-            
-            # Calculate metrics for optimal portfolio
-            optimal_portfolio = {
-                'weights': optimal_weights,
-                'return': np.sum(annual_returns * optimal_weights),
-                'volatility': np.sqrt(np.dot(optimal_weights.T, np.dot(daily_returns.cov() * 252, optimal_weights))),
-                'individual_returns': annual_returns.values,
-                'individual_volatilities': annual_volatility.values
-            }
-            optimal_portfolio['sharpe_ratio'] = calculate_sharpe_ratio(
-                optimal_portfolio['return'],
-                optimal_portfolio['volatility'],
-                risk_free_rate
-            )
-            
-            # Create ETF names list for charts
-            etf_names = list(prices.columns)
-            
-            # Display results
-            col1, col2 = st.columns([3, 1])
-            
-            # Efficient Frontier Chart
-            with col1:
-                efficient_frontier = create_efficient_frontier_chart(mc_results, optimal_portfolio, etf_names)
-                if efficient_frontier:
-                    st.plotly_chart(efficient_frontier, use_container_width=True)
-            
-            # Portfolio Composition
-            with col2:
-                composition_chart = create_portfolio_composition_chart(optimal_portfolio['weights'], etf_names)
-                st.plotly_chart(composition_chart, use_container_width=True)
-            
-            # Risk Metrics Table
-            st.subheader("Portfolio Risk Metrics")
-            metrics_df, summary_df = create_risk_metrics_table(optimal_portfolio, etf_names)
-            
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.table(metrics_df)
-            with col2:
-                st.table(summary_df)
-            
-            # Correlation Heatmap
-            st.subheader("ETF Correlation Analysis")
-            correlation_chart = create_correlation_heatmap(daily_returns, etf_names)
-            st.plotly_chart(correlation_chart, use_container_width=True)
-            
-            # Historical Performance
-            st.subheader("Historical Performance")
-            
-            # Normalize price data for comparison
-            normalized_prices = prices / prices.iloc[0]
-            
-            fig = px.line(
-                normalized_prices,
-                title=f"Historical Price Performance (Simulated)",
-                labels={"value": "Normalized Price", "variable": "ETF"}
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Add risk assessment results
-            st.subheader("AI Risk Assessment")
-            
-            # Simple risk score based on volatility
-            risk_score = int((optimal_portfolio['volatility'] * 100) * 2)
-            if risk_score > 100:  # Cap at 100
-                risk_score = 100
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.metric("Portfolio Risk Score", f"{risk_score}/100")
+            with st.spinner("Generating data and optimizing portfolio..."):
+                # Generate mock data
+                prices = generate_mock_data(selected_etfs, days)
                 
-                if risk_score < 33:
-                    st.info("Low Risk: This portfolio has relatively low volatility.")
-                elif risk_score < 66:
-                    st.warning("Medium Risk: This portfolio has moderate volatility.")
+                # Calculate returns and metrics
+                daily_returns, annual_returns, annual_volatility = calculate_returns(prices)
+                
+                # Run Monte Carlo simulation
+                mc_results = monte_carlo_simulation(daily_returns)
+                
+                # Find optimal portfolio
+                optimal_weights = optimize_portfolio(daily_returns, risk_free_rate)
+                
+                # Calculate metrics for optimal portfolio
+                optimal_portfolio = {
+                    'weights': optimal_weights,
+                    'return': np.sum(annual_returns * optimal_weights),
+                    'volatility': np.sqrt(np.dot(optimal_weights.T, np.dot(daily_returns.cov() * 252, optimal_weights))),
+                    'individual_returns': annual_returns.values,
+                    'individual_volatilities': annual_volatility.values
+                }
+                optimal_portfolio['sharpe_ratio'] = calculate_sharpe_ratio(
+                    optimal_portfolio['return'],
+                    optimal_portfolio['volatility'],
+                    risk_free_rate
+                )
+                
+                # Create ETF names list for charts
+                etf_names = list(prices.columns)
+                
+                # Display results
+                col1, col2 = st.columns([3, 1])
+                
+                # Efficient Frontier Chart
+                with col1:
+                    efficient_frontier = create_efficient_frontier_chart(mc_results, optimal_portfolio, etf_names)
+                    if efficient_frontier:
+                        st.plotly_chart(efficient_frontier, use_container_width=True)
+                
+                # Portfolio Composition
+                with col2:
+                    composition_chart = create_portfolio_composition_chart(optimal_portfolio['weights'], etf_names)
+                    st.plotly_chart(composition_chart, use_container_width=True)
+                
+                # Risk Metrics Table
+                st.subheader("Portfolio Risk Metrics")
+                metrics_df, summary_df = create_risk_metrics_table(optimal_portfolio, etf_names)
+                
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.table(metrics_df)
+                with col2:
+                    st.table(summary_df)
+                
+                # Correlation Heatmap
+                st.subheader("ETF Correlation Analysis")
+                correlation_chart = create_correlation_heatmap(daily_returns, etf_names)
+                st.plotly_chart(correlation_chart, use_container_width=True)
+                
+                # Historical Performance
+                st.subheader("Historical Performance")
+                
+                # Normalize price data for comparison
+                normalized_prices = prices / prices.iloc[0]
+                
+                fig = px.line(
+                    normalized_prices,
+                    title=f"Historical Price Performance (Simulated)",
+                    labels={"value": "Normalized Price", "variable": "ETF"}
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Add risk assessment results
+                st.subheader("AI Risk Assessment")
+                
+                # Simple risk score based on volatility
+                risk_score = int((optimal_portfolio['volatility'] * 100) * 2)
+                if risk_score > 100:  # Cap at 100
+                    risk_score = 100
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Portfolio Risk Score", f"{risk_score}/100")
+                    
+                    if risk_score < 33:
+                        st.info("Low Risk: This portfolio has relatively low volatility.")
+                    elif risk_score < 66:
+                        st.warning("Medium Risk: This portfolio has moderate volatility.")
+                    else:
+                        st.error("High Risk: This portfolio has high volatility.")
+                
+                with col2:
+                    avg_correlation = daily_returns.corr().values.mean()
+                    st.metric("Average Correlation", f"{avg_correlation:.2f}")
+                    
+                    if avg_correlation < 0.3:
+                        st.info("Good Diversification")
+                    elif avg_correlation < 0.7:
+                        st.warning("Moderate Diversification")
+                    else:
+                        st.error("Poor Diversification")
+                
+                with col3:
+                    interest_rate_sensitivity = "Medium"
+                    long_term_etfs = ["TLT", "VGLT", "BLV", "SPTL"]
+                    short_term_etfs = ["SHY", "VCSH", "BSV", "SCHO", "VGSH", "SHV"]
+                    
+                    # Check if any long-term bonds are in the selected ETFs
+                    if any(etf in etf_names for etf in long_term_etfs):
+                        interest_rate_sensitivity = "High"
+                    # Check if mostly short-term bonds
+                    elif all(etf in short_term_etfs for etf in etf_names):
+                        interest_rate_sensitivity = "Low"
+                    
+                    st.metric("Interest Rate Sensitivity", interest_rate_sensitivity)
+                    
+                    if interest_rate_sensitivity == "Low":
+                        st.info("Low sensitivity to interest rate changes")
+                    elif interest_rate_sensitivity == "Medium":
+                        st.warning("Moderate sensitivity to interest rate changes")
+                    else:
+                        st.error("High sensitivity to interest rate changes")
+                
+                # Portfolio Recommendation
+                st.subheader("Portfolio Recommendation")
+                
+                if risk_score < 40:
+                    recommendation = "This conservative portfolio is well-suited for risk-averse investors. It offers stability with modest returns."
+                elif risk_score < 70:
+                    recommendation = "This balanced portfolio offers a good compromise between risk and return, suitable for moderate investors."
                 else:
-                    st.error("High Risk: This portfolio has high volatility.")
-            
-            with col2:
-                avg_correlation = daily_returns.corr().values.mean()
-                st.metric("Average Correlation", f"{avg_correlation:.2f}")
+                    recommendation = "This aggressive portfolio offers higher potential returns but with increased volatility. Suitable for risk-tolerant investors."
                 
-                if avg_correlation < 0.3:
-                    st.info("Good Diversification")
-                elif avg_correlation < 0.7:
-                    st.warning("Moderate Diversification")
-                else:
-                    st.error("Poor Diversification")
-            
-            with col3:
-                interest_rate_sensitivity = "Medium"
-                long_term_etfs = ["TLT", "VGLT", "BLV", "SPTL"]
-                short_term_etfs = ["SHY", "VCSH", "BSV", "SCHO", "VGSH", "SHV"]
+                st.write(recommendation)
                 
-                # Check if any long-term bonds are in the selected ETFs
-                if any(etf in etf_names for etf in long_term_etfs):
-                    interest_rate_sensitivity = "High"
-                # Check if mostly short-term bonds
-                elif all(etf in short_term_etfs for etf in etf_names):
-                    interest_rate_sensitivity = "Low"
-                
-                st.metric("Interest Rate Sensitivity", interest_rate_sensitivity)
-                
-                if interest_rate_sensitivity == "Low":
-                    st.info("Low sensitivity to interest rate changes")
-                elif interest_rate_sensitivity == "Medium":
-                    st.warning("Moderate sensitivity to interest rate changes")
-                else:
-                    st.error("High sensitivity to interest rate changes")
-            
-            # Portfolio Recommendation
-            st.subheader("Portfolio Recommendation")
-            
-            if risk_score < 40:
-                recommendation = "This conservative portfolio is well-suited for risk-averse investors. It offers stability with modest returns."
-            elif risk_score < 70:
-                recommendation = "This balanced portfolio offers a good compromise between risk and return, suitable for moderate investors."
-            else:
-                recommendation = "This aggressive portfolio offers higher potential returns but with increased volatility. Suitable for risk-tolerant investors."
-            
-            st.write(recommendation)
-            
-            # Disclaimer
-            st.caption("**Disclaimer**: This application uses simulated data based on historical ETF characteristics. The results are for educational purposes only and should not be considered investment advice.")
+                # Disclaimer
+                st.caption("**Disclaimer**: This application uses simulated data based on historical ETF characteristics. The results are for educational purposes only and should not be considered investment advice.")
         
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
+            st.write("Please try again with different ETFs or settings.")
 
 if __name__ == "__main__":
     run_portfolio_optimization()
